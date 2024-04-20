@@ -4,3 +4,4 @@ authlib
 itsdangerous
 httpx
 pydantic_settings
+pyjwt

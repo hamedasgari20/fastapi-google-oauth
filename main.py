@@ -1,54 +1,67 @@
-from authlib.integrations.starlette_client import OAuth
 from fastapi import FastAPI
 from fastapi import Request
-from starlette.config import Config
-from starlette.middleware.sessions import SessionMiddleware
-from starlette.responses import HTMLResponse
-from starlette.responses import RedirectResponse
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
 
-from config import get_settings
+from apps.api import api_app
+from apps.auth import auth_app
 
 app = FastAPI()
-settings = get_settings()
+app.mount('/auth', auth_app)
+app.mount('/api', api_app)
 
-# Set up oauth
-config_data = {'GOOGLE_CLIENT_ID': settings.GOOGLE_CLIENT_ID, 'GOOGLE_CLIENT_SECRET': settings.GOOGLE_CLIENT_SECRET}
-starlette_config = Config(environ=config_data)
-oauth = OAuth(starlette_config)
-oauth.register(
-    name='google',
-    server_metadata_url='https://accounts.google.com/.well-known/openid-configuration',
-    client_kwargs={'scope': 'openid email profile'},
+ALLOWED_HOSTS = ["*"]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=ALLOWED_HOSTS,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
-
-app.add_middleware(SessionMiddleware, secret_key=settings.SECRET_KEY)
 
 
 @app.get('/')
-def public(request: Request):
-    user = request.session.get('user')
-    if user:
-        name = user.get('name')
-        return HTMLResponse(f'<p>Hello {name}!</p><a href=/logout>Logout</a>')
-    return HTMLResponse('<a href=/login>Login</a>')
+async def root():
+    return HTMLResponse('<body><a href="/auth/login">Log In</a></body>')
 
 
-@app.route('/login')
-async def login(request: Request):
-    redirect_uri = request.url_for('auth')
-    return await oauth.google.authorize_redirect(request, redirect_uri)
+@app.get('/token')
+async def token(request: Request):
+    return HTMLResponse('''
+                <script>
+                function send(){
+                    var req = new XMLHttpRequest();
+                    req.onreadystatechange = function() {
+                        if (req.readyState === 4) {
+                            console.log(req.response);
+                            if (req.response["result"] === true) {
+                                window.localStorage.setItem('jwt', req.response["access_token"]);
+                            }
+                        }
+                    }
+                    req.withCredentials = true;
+                    req.responseType = 'json';
+                    req.open("get", "/auth/token?"+window.location.search.substr(1), true);
+                    req.send("");
 
+                }
+                </script>
+                <button onClick="send()">Get FastAPI JWT Token</button>
 
-@app.route('/auth')
-async def auth(request: Request):
-    token = await oauth.google.authorize_access_token(request)
-    user = token.get('userinfo')
-    if user:
-        request.session['user'] = user
-    return RedirectResponse(url='/')
-
-
-@app.route('/logout')
-async def logout(request: Request):
-    request.session.pop('user', None)
-    return RedirectResponse(url='/')
+                <button onClick='fetch("http://127.0.0.1:8000/api/").then(
+                    (r)=>r.json()).then((msg)=>{console.log(msg)});'>
+                Call Unprotected API
+                </button>
+                <button onClick='fetch("http://127.0.0.1:8000/api/protected").then(
+                    (r)=>r.json()).then((msg)=>{console.log(msg)});'>
+                Call Protected API without JWT
+                </button>
+                <button onClick='fetch("http://127.0.0.1:8000/api/protected",{
+                    headers:{
+                        "Authorization": "Bearer " + window.localStorage.getItem("jwt")
+                    },
+                }).then((r)=>r.json()).then((msg)=>{console.log(msg)});'>
+                Call Protected API wit JWT
+                </button>
+            ''')
